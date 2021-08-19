@@ -4,6 +4,7 @@
 """
 import json
 import requests
+import logging
 
 from requests.adapters import HTTPAdapter
 from requests.packages.urllib3.util.retry import Retry
@@ -37,8 +38,14 @@ class ZapperAPI:
         except Exception as e:
             # check if json (with error message) is returned
             try:
+                from time import sleep
                 content = json.loads(response.content.decode('utf-8'))
-                raise ValueError(content)
+                if content['message'] == 'Request Timeout':
+                    logging.warning(content)
+                    sleep(5)
+                    return self.__request(url)
+                else:
+                    raise ValueError(content)
             # if no json
             except json.decoder.JSONDecodeError:
                 pass

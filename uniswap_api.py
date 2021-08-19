@@ -13,6 +13,7 @@ from gql.transport.requests import RequestsHTTPTransport
 FEE_TIER_TO_TICK_SPACING = {500: 10, 3000: 60, 10000: 200}
 DOWNLOAD_INTERVAL = 3600  # Number of seconds until stale date is re-downloaded
 CACHE_INTERVAL = 86400  # Number of seconds until GQL cache is saved to file
+CG = dict()
 
 
 class UniswapPosition:
@@ -149,8 +150,12 @@ class UniswapPosition:
 
         if df_prc is None:
             if self.cg is None:
-                from api.coingecko_api import CoinGecko
-                self.cg = CoinGecko()
+                if 'api' in CG.keys():
+                    self.cg = CG['api']
+                else:
+                    from api.coingecko_api import CoinGecko
+                    self.cg = CoinGecko()
+                    CG['api'] = self.cg
             df_prc = self.cg.get_price(symbols=[self.x_symbol, self.y_symbol], vs_currencies='usd')
         prc = df_prc.loc['usd', self.x_symbol] / df_prc.loc['usd', self.y_symbol]
         x, y = self.calc_reserves(prc)
@@ -166,8 +171,12 @@ class UniswapPosition:
 
         if df_prc is None:
             if self.cg is None:
-                from api.coingecko_api import CoinGecko
-                self.cg = CoinGecko()
+                if 'api' in CG.keys():
+                    self.cg = CG['api']
+                else:
+                    from api.coingecko_api import CoinGecko
+                    self.cg = CoinGecko()
+                    CG['api'] = self.cg
             df_prc = self.cg.get_price(symbols=[self.x_symbol, self.y_symbol], vs_currencies='usd')
         prc = df_prc.loc['usd', self.x_symbol] / df_prc.loc['usd', self.y_symbol]
         x, y = self.calc_reserves(prc)
