@@ -3,11 +3,15 @@ import pandas as pd
 from pycoingecko import CoinGeckoAPI
 from datetime import datetime
 
+STABLECOINS = ['DAI', 'USDC', 'FEI', 'USDT', 'UST', 'TUSD']
 LST_DUPLICATE_COINS = ['unicorn-token', 'universe-token', 'millimeter', 'mm-token', 'compound-coin', 'raicoin',
                        'rai-finance', 'rai-token', 'truefi', 'game', 'gastrocoin', 'global-trust-coin', 'rune',
                        'thorchain-erc20', 'payperex', 'earnscoin', 'binance-peg-dogecoin', 'smartmesh',
                        'binance-peg-iotex', 'porkswap', 'euro-ritva-token', 'golden-ratio-token', 'hydro-protocol',
-                       'hotnow', 'wrapped-terra', 'banana', 'banana-finance', 'supercoin', 'san-diego-coin']
+                       'hotnow', 'wrapped-terra', 'banana', 'banana-finance', 'supercoin', 'san-diego-coin',
+                       'covenants', 'unifi-defi', 'wild-credit', 'wild-crypto', 'bitdao', 'bitrewards-token',
+                       'first-bitcoin', 'bat-finance', 'arc-governance-old', 'oracolxor', 'rare', 'unique-one',
+                       'solar-dao']
 REFRESH_INTERVAL = 60 * 10  # Number of seconds until stale price data is re-downloaded
 COINS = dict()
 
