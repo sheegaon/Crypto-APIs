@@ -4,13 +4,14 @@
 """
 import os
 import pickle
+import logging
 from datetime import datetime
 import numpy as np
 import pandas as pd
 from gql import Client, gql
 from gql.transport.requests import RequestsHTTPTransport
+import graphql
 
-FEE_TIER_TO_TICK_SPACING = {500: 10, 3000: 60, 10000: 200}
 DOWNLOAD_INTERVAL = 3600  # Number of seconds until stale date is re-downloaded
 CACHE_INTERVAL = 86400  # Number of seconds until GQL cache is saved to file
 CG = dict()
@@ -193,16 +194,21 @@ class UniswapPosition:
 
 
 class UniswapGQL:
-    def __init__(self):
-        self.client = _get_client()
+    def __init__(self, network='ethereum'):
+        self.client = _get_client(network=network)
+        self.network = network
+        self.gql_version = int(graphql.version[0])
     
         # Load cached data
         folder, _ = os.path.split(__file__)
         folder = folder[:-4]
         self.fn = os.path.join(folder, 'data', 'uniswap_gql_cache.pickle')
         if os.path.isfile(self.fn):
-            with open(self.fn, 'rb') as pkl_handle:
-                self.cache = pickle.load(pkl_handle)
+            try:
+                with open(self.fn, 'rb') as pkl_handle:
+                    self.cache = pickle.load(pkl_handle)
+            except pickle.UnpicklingError:
+                self.cache = dict()
         else:
             self.cache = dict()
         self.last_saved = datetime.now()
@@ -213,15 +219,21 @@ class UniswapGQL:
                 pickle.dump(self.cache, pkl_handle)
             self.last_saved = datetime.now()
 
-    def execute(self, query):
+    def execute(self, query, attempt=0):
         try:
             result = self.client.execute(gql(query))
-        except:
+        except Exception as ex:
+            if attempt > 10:
+                logging.warning(f"Attempt #{attempt}\n{ex}")
+            else:
+                logging.debug(f"Attempt #{attempt}\n{ex}")
+            if attempt > 19:
+                raise ex
             from time import sleep
-            sleep(5)
+            sleep(5 + 2 * attempt)
             self.save_cache(force=True)
-            self.client = _get_client()
-            return self.execute(query)
+            self.client = _get_client(network=self.network)
+            return self.execute(query, attempt=attempt + 1)
         return result
 
     def fetch_query_data(self, query):
@@ -258,13 +270,17 @@ class UniswapGQL:
             rk = ''
             res = {rk: 1000 * ['']}
             while len(res[rk]) == 1000:
+                logging.disable(logging.INFO)
                 res = self.execute(query.format(skip=skip))
+                logging.disable(logging.NOTSET)
                 rk = list(res.keys())[0]
                 lst_res += res[rk]
                 skip += 1000
             result = {rk: lst_res}
         else:
+            logging.disable(logging.INFO)
             result = self.execute(query)
+            logging.disable(logging.NOTSET)
         dct_result = dict()
         for schema in result.keys():
             df_schema = result_to_df(result[schema])
@@ -339,9 +355,13 @@ class UniswapGQL:
                 totalValueLockedETH
                 token0 {{
                   symbol
+                  name
+                  decimals
                 }}
                 token1 {{
                   symbol
+                  name
+                  decimals
                 }}
               }}
             }}
@@ -390,12 +410,12 @@ class UniswapGQL:
               }}
             }}        
         """
-        s_att = self.fetch_query_data(query)['pools'].loc[0, :]
+        s_att = self.fetch_query_data(query)['pools'].loc[0, :].copy()
         for c in s_att.index:
             v = pd.to_numeric(s_att[c], errors='coerce')
             if pd.notna(v):
                 s_att[c] = v
-        s_att['tick_spacing'] = FEE_TIER_TO_TICK_SPACING[s_att.loc['feeTier']]
+        s_att['tick_spacing'] = s_att.loc['feeTier'] / 50
         s_att['cur_prc'] = tick2prc(
             s_att['tick'], decimals0=s_att['token0.decimals'], decimals1=s_att['token1.decimals'])
         self.cache[f'att_{pool_id}'] = (datetime.today(), s_att)
@@ -428,7 +448,8 @@ class UniswapGQL:
                   symbol
                   name
                   decimals
-                }}            
+                }}
+                feeTier          
               }}
             }}
             """
@@ -436,16 +457,16 @@ class UniswapGQL:
         df_fetch = self.fetch_query_data(query)['pools']
         dec0 = pd.to_numeric(df_fetch['token0.decimals'].iloc[0])
         dec1 = pd.to_numeric(df_fetch['token1.decimals'].iloc[0])
-        df_liq = df_fetch.iloc[0, 0].sort_values('tickIdx').set_index('tickIdx')
+        df_liq = df_fetch.iloc[0, 1].sort_values('tickIdx').set_index('tickIdx')
         if fill_near is not None:
             center_tick = prc2tick(fill_near, decimals0=dec0, decimals1=dec1)
-            ticks = np.array(df_liq.index)
+            tick_spacing = df_fetch['feeTier'].iloc[0] / 50
+            ticks = np.arange(df_liq.index[0], df_liq.index[-1], tick_spacing)
             center_tick = ticks[np.argmin(np.abs(ticks - center_tick))]
-            tick_interval = np.min(ticks[1:] - ticks[:-1])
             ticks = np.concatenate(
-                [ticks,
-                 np.array(np.arange(center_tick - 40 * tick_interval,
-                                    center_tick + 41 * tick_interval, tick_interval))])
+                [np.array(df_liq.index),
+                 np.array(np.arange(center_tick - 20 * tick_spacing,
+                                    center_tick + 21 * tick_spacing, tick_spacing))])
             ticks = list(set(ticks))
             ticks.sort()
             df_liq = df_liq.reindex(ticks).fillna(0.)
@@ -492,6 +513,10 @@ class UniswapGQL:
         df_pool_history = pd.concat([
             df_pool_history, self.fetch_query_data(query)['pools'].iloc[0, 0]]).drop_duplicates(
             subset=['date'], keep='last').reset_index(drop=True)
+        for v in ['open', 'high', 'low', 'close']:
+            df_pool_history[v] = pd.to_numeric(df_pool_history[v], errors='coerce')
+            df_pool_history.loc[df_pool_history[v] > 1e20, v] = df_pool_history[v].shift(1)
+            df_pool_history.loc[df_pool_history[v].isna(), v] = df_pool_history[v].shift(-1)
         self.cache[f'daily_{pool_id}'] = (datetime.today(), df_pool_history)
         self.save_cache()
         return df_pool_history
@@ -525,6 +550,8 @@ class UniswapGQL:
         df_pool_history = pd.concat(
             [df_pool_history, self.fetch_query_data(query)['pools'].iloc[0, 0]]).drop_duplicates(
             subset=['date'], keep='last').reset_index(drop=True)
+        for v in ['close', 'high', 'low', 'open']:
+            df_pool_history[v] = pd.to_numeric(df_pool_history[v], errors='coerce').clip(upper=1e15)
         self.cache[f'hourly_{pool_id}'] = (datetime.today(), df_pool_history)
         self.save_cache()
         return df_pool_history
@@ -560,10 +587,12 @@ class UniswapGQL:
             }}
             token0 {{
               symbol
+              name
               decimals
             }}
             token1 {{
               symbol
+              name
               decimals
             }}
             owner
@@ -653,19 +682,37 @@ def _unix_time(date):
     return (pd.to_datetime(date) - datetime(1970, 1, 1)).total_seconds()
 
 
-def _get_client():
-    transport = RequestsHTTPTransport(
-        url='https://api.thegraph.com/subgraphs/name/uniswap/uniswap-v3',
-        verify=True,
-        retries=5,
-    )
+def _get_client(network='ethereum'):
+    if network == 'ethereum':
+        url = 'https://api.thegraph.com/subgraphs/name/uniswap/uniswap-v3'
+        # url = 'https://api.thegraph.com/subgraphs/name/mariorz/uniswapv3'
+    elif network == 'arbitrum':
+        # Check https://github.com/Uniswap/v3-info/tree/master/src for updates
+        url = 'https://api.thegraph.com/subgraphs/name/ianlapham/arbitrum-dev'
+    else:
+        raise ValueError(f"Invalid network {network}")
+    transport = RequestsHTTPTransport(url=url, verify=True, retries=5)
 
     # Create a GraphQL client using the defined transport
-    client = Client(transport=transport, fetch_schema_from_transport=True)
+    client = None
+    while client is None:
+        try:
+            client = Client(transport=transport, fetch_schema_from_transport=True)
+            break
+        except Exception as e:
+            from time import sleep
+            sleep(5)
+            logging.error(e)
+            continue
+
     return client
 
 
 def tick2prc(tick, decimals0, decimals1):
+    if type(decimals0) == str:
+        decimals0 = float(decimals0)
+    if type(decimals1) == str:
+        decimals1 = float(decimals1)
     return 1.0001 ** tick * (10. ** (decimals0 - decimals1))
 
 

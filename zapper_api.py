@@ -1,4 +1,6 @@
 """
+ This API is a python wrapper around Zapper's REST API, focusing on the functions I use most.
+
  https://docs.zapper.fi/zapper-api/endpoints
  https://api.zapper.fi/api/static/index.html
 """
@@ -74,23 +76,84 @@ class ZapperAPI:
 
         dct_response = self.__request(api_url)
 
-        return pd.DataFrame(dct_response.popitem()[1]['products'][0]['assets'])
+        try:
+            return pd.DataFrame(dct_response.popitem()[1]['products'][0]['assets'])
+        except:
+            from time import sleep
+            sleep(5)
+            return self.get_balances(address=address, protocol=protocol, network=network)
 
     def get_token_balances(self, address, network='ethereum'):
-        return self.get_balances(address=address, network=network, protocol='tokens')
+        df_bal = self.get_balances(address=address, network=network, protocol='tokens')
+        df_bal['symbol'] = df_bal['symbol'].str.replace('(v2)', '', regex=False)
+        df_bal['category'] = 'wallet'
+        df_bal['hide'].fillna(False, inplace=True)
+        return df_bal
 
-    def get_uniswap_balances(self, address, network='ethereum'):
-        return self.get_balances(address=address, network=network, protocol='uniswap-v3')
+    def get_protocol_balances(self, address, protocol, network='ethereum'):
+        """
+        Get balances at a given address for a given protocol and network. Unpacks claimable tokens into main DataFrame.
 
-    def get_all_tokens(self, address):
-        df_uni = self.get_uniswap_balances(address)
+        Parameters
+        ----------
+        address : str
+            Ethereum wallet address.
+        protocol : {'uniswap-v3', 'aave-v2'}
+            More protocols may be supported over time as needed.
+        network : {'ethereum', 'optimism', 'arbitrum', 'polygon'}
+            Only ethereum network is guaranteed to work.
+
+        Returns
+        -------
+        pd.DataFrame
+        """
+        df_bal = self.get_balances(address=address, network=network, protocol=protocol)
+        for i, r in df_bal.iterrows():
+            if r['type'] != 'claimable':
+                continue
+            for key, val in r['tokens'][0].items():
+                if key == 'type':
+                    continue
+                df_bal.loc[i, key] = val
+        return df_bal
+
+    def get_all_tokens(self, address, exposures=False):
+        df_uni = self.get_protocol_balances(address, protocol='uniswap-v3')
+        df_aave = self.get_protocol_balances(address, protocol='aave-v2')
         df_wal = self.get_token_balances(address)
-        cols = ['symbol', 'price', 'balance', 'balanceUSD']
-        df_all = df_wal[cols].copy()
-        df_all = pd.concat([df_all, df_uni.loc[df_uni['type'] == 'claimable', cols]])
-        for _, tk in df_uni.loc[df_uni['type'] == 'pool', ['tokens']].iterrows():
-            tkr = pd.DataFrame(tk['tokens'])
-            df_all = pd.concat([df_all, tkr[cols]])
-        df_sum = df_all.groupby('symbol')[['balance', 'balanceUSD']].sum()
+        cols = ['category', 'symbol', 'price', 'balance', 'balanceUSD']
+        df_all = df_wal.loc[~df_wal['hide'], cols].copy()
+        df_all = pd.concat([df_all, df_aave[cols], df_uni.loc[df_uni['category'] == 'claimable', cols]])
+        df_all_exp = df_all.copy()
+        for _, tk in df_uni.loc[df_uni['category'] == 'pool', ['tokens']].iterrows():
+            df_tkr = pd.DataFrame(tk['tokens'])
+            df_tkr['category'] = 'pool'
+            df_all = pd.concat([df_all, df_tkr[cols]])
+            if exposures:
+                lst_sym1 = [x for x in df_tkr['symbol'] if x not in ['ETH', 'USDC', 'WETH', 'USDT']]
+                if len(lst_sym1) == 0:
+                    df_tkr['symbol'] = 'ETH'
+                else:
+                    df_tkr['symbol'] = [x for x in df_tkr['symbol'] if x not in ['ETH', 'USDC', 'WETH', 'USDT']][0]
+                df_tkr['balanceUSD'] = df_tkr['balanceUSD'].sum()
+                df_all_exp = pd.concat([df_all_exp, df_tkr.loc[[0], cols]])
+        df_sum = df_all.groupby(['symbol', 'category'])[['balance', 'balanceUSD']].sum().reset_index().set_index(
+            'symbol')
         df_sum['price'] = df_all.drop_duplicates('symbol').set_index('symbol')['price']
+        if exposures:
+            from api.coingecko_api import STABLECOINS
+
+            df_all_exp['symbol'] = df_all_exp['symbol'].str.replace('a', '')
+            s_pot_exp = df_all_exp.groupby('symbol')['balanceUSD'].sum()
+            s_pot_exp['ETH'] += s_pot_exp['WETH']
+            s_pot_exp.drop('WETH', inplace=True)
+            s_pot_exp.drop(STABLECOINS, errors='ignore', inplace=True)
+            s_pot_exp.sort_values(ascending=False, inplace=True)
+            df_cur_exp = df_sum.reset_index()[['symbol', 'balanceUSD']].copy()
+            df_cur_exp['symbol'] = df_cur_exp['symbol'].str.replace('WETH', 'ETH')
+            df_cur_exp['symbol'] = df_cur_exp['symbol'].str.replace('a', '')
+            s_cur_exp = df_cur_exp.groupby('symbol')['balanceUSD'].sum().sort_values(ascending=False)
+            s_cur_exp.drop(STABLECOINS, errors='ignore', inplace=True)
+            s_cur_exp.index.name = 'symbol'
+            return df_sum, s_pot_exp, s_cur_exp
         return df_sum
