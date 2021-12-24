@@ -557,6 +557,13 @@ class UniswapGQL:
         return df_pool_history
 
     def fetch_mints_burns(self, origin=None, pool=None, mints=True, latest=False):
+        if isinstance(origin, list):
+            a = []
+            for w in origin:
+                wa = self.fetch_mints_burns(w, pool=pool, mints=mints, latest=latest)
+                a += [wa]
+            return pd.concat(a).reset_index(drop=True)
+
         qtype = 'mints' if mints else 'burns'
         if f'{qtype}_{origin}_{pool}' in self.cache.keys() and not latest:
             date, df_out = self.cache[f'{qtype}_{origin}_{pool}']
@@ -614,13 +621,13 @@ class UniswapGQL:
         self.save_cache()
         return df_out
 
-    def get_active_positions(self, wallet_id):
+    def get_all_positions(self, wallet_id):
         """
-        Fetch all mints and burns for a given wallet and net out to find active positions.
+        Fetch all mints for a given wallet and remove duplicates.
 
         Parameters
         ----------
-        wallet_id : str
+        wallet_id : str or list
 
         Returns
         -------
@@ -628,7 +635,7 @@ class UniswapGQL:
         """
         df_mym = self.fetch_mints_burns(wallet_id, latest=True)
         df_mym['pos_id'] = df_mym['pool.id'] + df_mym['tickLower'].apply(str) + df_mym['tickUpper'].apply(str)
-        df_active = df_mym.drop_duplicates(subset=['pos_id']).set_index('pos_id')
+        df_mints = df_mym.drop_duplicates(subset=['pos_id']).set_index('pos_id')
         df_mym['token0.decimals'] = pd.to_numeric(df_mym['token0.decimals'])
         df_mym['token1.decimals'] = pd.to_numeric(df_mym['token1.decimals'])
         for i, my in df_mym.iterrows():
@@ -639,7 +646,22 @@ class UniswapGQL:
                 prc_upper=tick2prc(my['tickUpper'], decimals0=my['token0.decimals'], decimals1=my['token1.decimals']),
                 x0=my['amount0'], y0=my['amount1'])
             df_mym.loc[i, 'liq'] = pos.liq
-        df_active['mint_liq'] = df_mym.groupby('pos_id')['liq'].sum()
+        df_mints['mint_liq'] = df_mym.groupby('pos_id')['liq'].sum()
+        return df_mints
+
+    def get_active_positions(self, wallet_id):
+        """
+        Fetch all mints and burns for a given wallet and net out to find active positions.
+
+        Parameters
+        ----------
+        wallet_id : str or list
+
+        Returns
+        -------
+        pd.DataFrame
+        """
+        df_active = self.get_all_positions(wallet_id)
         df_myb = self.fetch_mints_burns(wallet_id, mints=False, latest=True)
         df_myb['pos_id'] = df_myb['pool.id'] + df_myb['tickLower'].apply(str) + df_myb['tickUpper'].apply(str)
         df_myb['token0.decimals'] = pd.to_numeric(df_myb['token0.decimals'])

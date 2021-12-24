@@ -18,6 +18,8 @@ LST_DUPLICATE_COINS = [
     'robinos', 'dogswap-token', 'genesis-mana', 'rinnegan', 'margin-call', 'impermax', 'floki-one', 'floki-musk',
     'shiba-floki', 'baby-moon-floki', 'staked-olympus', 'ash', 'aeneas', 'ufocoin', 'unknown-fair-object',
     'polybeta-finance', 'mim', 'koinon', 'heliumx', 'osmoscoin', 'metaaxis', 'wolf-game-wool', 'tower-finance',
+    'safeswap-online', 'juicebox', 'cardswap', 'umi', 'decentral-games-ice', 'ice-dao', 'game-fantasy-token',
+    'good-fire', 'olympus-v1',
 ]
 REFRESH_INTERVAL = 60 * 10  # Number of seconds until stale price data is re-downloaded
 COINS = dict()

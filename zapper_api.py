@@ -12,6 +12,7 @@ from requests.adapters import HTTPAdapter
 from requests.packages.urllib3.util.retry import Retry
 
 import pandas as pd
+import numpy as np
 
 
 class ZapperAPI:
@@ -70,6 +71,13 @@ class ZapperAPI:
         return api_url
 
     def get_balances(self, address, protocol, network='ethereum'):
+        if isinstance(address, list):
+            a = []
+            for w in address:
+                wa = self.get_balances(w, protocol=protocol, network=network)
+                a += [wa]
+            return pd.concat(a).reset_index(drop=True)
+
         api_url = f'{self.api_base_url}protocols/{protocol}/balances'
         api_url = self.__api_url_params(
             api_url, {'api_key': self.api_key, 'addresses%5B%5D': address, 'network': network})
@@ -77,7 +85,11 @@ class ZapperAPI:
         dct_response = self.__request(api_url)
 
         try:
-            return pd.DataFrame(dct_response.popitem()[1]['products'][0]['assets'])
+            products = dct_response.popitem()[1]['products']
+            if len(products) == 0:
+                return pd.DataFrame()
+            else:
+                return pd.DataFrame(products[0]['assets'])
         except:
             from time import sleep
             sleep(5)
@@ -96,8 +108,8 @@ class ZapperAPI:
 
         Parameters
         ----------
-        address : str
-            Ethereum wallet address.
+        address : str or list
+            Ethereum wallet address or list of addresses.
         protocol : {'uniswap-v3', 'aave-v2'}
             More protocols may be supported over time as needed.
         network : {'ethereum', 'optimism', 'arbitrum', 'polygon'}
@@ -108,6 +120,10 @@ class ZapperAPI:
         pd.DataFrame
         """
         df_bal = self.get_balances(address=address, network=network, protocol=protocol)
+        if protocol == 'uniswap-v3':
+            df_bal['pool_address'] = np.nan
+            df_bal['pool_balance'] = np.nan
+            df_bal['pool_index'] = np.nan
         for i, r in df_bal.iterrows():
             if r['type'] != 'claimable':
                 continue
@@ -115,6 +131,15 @@ class ZapperAPI:
                 if key == 'type':
                     continue
                 df_bal.loc[i, key] = val
+            if protocol == 'uniswap-v3':
+                if df_bal.loc[i - 1, 'category'] == 'pool':
+                    df_bal.loc[i, 'pool_address'] = df_bal.loc[i - 1, 'address']
+                    df_bal.loc[i, 'pool_balance'] = df_bal.loc[i - 1, 'balanceUSD']
+                    df_bal.loc[i, 'pool_index'] = i - 1
+                else:
+                    df_bal.loc[i, 'pool_address'] = df_bal.loc[i - 2, 'address']
+                    df_bal.loc[i, 'pool_balance'] = df_bal.loc[i - 2, 'balanceUSD']
+                    df_bal.loc[i, 'pool_index'] = i - 2
         return df_bal
 
     def get_all_tokens(self, address, exposures=False):

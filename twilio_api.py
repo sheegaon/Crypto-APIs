@@ -1,5 +1,6 @@
 import logging
 from twilio.rest import Client
+from twilio.base.exceptions import TwilioException
 
 
 class TwilioSender:
@@ -13,5 +14,8 @@ class TwilioSender:
         self.client = Client(account_sid, auth_token)
 
     def send_message(self, msg):
-        message = self.client.messages.create(body=msg, from_=self.from_phone_num, to=self.my_phone_num)
-        logging.debug(message.sid)
+        try:
+            message = self.client.messages.create(body=msg, from_=self.from_phone_num, to=self.my_phone_num)
+            logging.debug(message.sid)
+        except TwilioException as ex:
+            logging.warning(f"Twilio exception: {ex}")
